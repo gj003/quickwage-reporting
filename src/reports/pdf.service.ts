@@ -71,12 +71,17 @@ export class PdfService {
   /**
    * Streams a PDF directly to the given Writable. Columns are inferred from
    * the first row. Supports async iterables (e.g. a DB cursor).
+   *
+   * PDF is not suitable for very large datasets — 1M rows is ~25k pages.
+   * `maxRows` protects callers from accidentally generating multi-GB files.
    */
   async streamTable(
     title: string,
     rows: AsyncIterable<Row> | Iterable<Row>,
     out: Writable,
+    opts: { maxRows?: number } = {},
   ): Promise<void> {
+    const maxRows = opts.maxRows ?? 50_000;
     const doc = new PDFDocument({ size: 'A4', margin: 40, layout: 'landscape' });
     doc.pipe(out);
 
@@ -106,8 +111,22 @@ export class PdfService {
     };
 
     let any = false;
+    let count = 0;
+    let truncated = false;
+    let aborted = false;
+    const onClose = () => {
+      aborted = true;
+    };
+    out.on('close', onClose);
+
     for await (const row of rows) {
+      if (aborted) break;
+      if (count >= maxRows) {
+        truncated = true;
+        break;
+      }
       any = true;
+      count += 1;
       if (!columns) {
         columns = Object.keys(row);
         const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -130,11 +149,26 @@ export class PdfService {
     }
 
     if (!any) doc.fontSize(12).text('No data.', { align: 'center' });
+    if (truncated) {
+      doc
+        .moveDown()
+        .fillColor('#b00')
+        .fontSize(10)
+        .text(`Truncated to first ${maxRows.toLocaleString()} rows — use XLSX for the full dataset.`, {
+          align: 'center',
+        })
+        .fillColor('#000');
+    }
 
     doc.end();
-    await new Promise<void>((resolve, reject) => {
-      out.on('finish', resolve);
-      out.on('error', reject);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        out.on('finish', resolve);
+        out.on('error', reject);
+        if (aborted) resolve();
+      });
+    } finally {
+      out.off('close', onClose);
+    }
   }
 }

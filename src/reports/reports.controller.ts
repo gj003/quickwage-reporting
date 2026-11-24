@@ -1,12 +1,13 @@
-import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import { ApiBody, ApiQuery, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { faker } from '@faker-js/faker';
 import { ReportService } from './report.service.js';
 import type { ReportFormat } from './report.types.js';
 
-async function* fakeRows(n: number): AsyncGenerator<Record<string, unknown>> {
+async function* fakeRows(n: number, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
   for (let i = 0; i < n; i++) {
+    if (signal?.aborted) return;
     yield {
       id: i + 1,
       name: faker.person.fullName(),
@@ -68,16 +69,22 @@ export class ReportsController {
 
   @Get('stream')
   @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
-  @ApiQuery({ name: 'count', required: false, description: 'Number of fake rows (default 10000)' })
+  @ApiQuery({ name: 'count', required: false, description: 'Number of fake rows (default 10000, max 1M)' })
   async stream(
     @Query('format') format: ReportFormat,
     @Query('count') count: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    const total = Math.min(Number(count ?? 10000), 1_000_000);
+    const total = Math.min(Math.max(Number(count ?? 10000), 1), 1_000_000);
     const options = { format, title: 'Large Report', filename: `large-${total}.${format}` };
     res.set(this.reports.headersFor(options));
-    await this.reports.stream(fakeRows(total), res, options);
+
+    // Stop generating if the client goes away.
+    const ac = new AbortController();
+    req.on('close', () => ac.abort());
+
+    await this.reports.stream(fakeRows(total, ac.signal), res, options);
   }
 
   private send(res: Response, report: { buffer: Buffer; mimeType: string; filename: string }) {
