@@ -1,0 +1,15 @@
+services:
+  report_and_analysis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /home/code
+    container_name: report_and_analysis
+    tty: true
+    stdin_open: true
+    volumes:
+      - .:/home/code
+    ports:
+      - "3000:3000"
+      - "9229:9229"
+    command: sh
