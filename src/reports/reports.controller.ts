@@ -1,45 +1,92 @@
-import { Controller, Get, Res } from '@nestjs/common';
-import { ApiTags, ApiProduces } from '@nestjs/swagger';
+import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
+import { ApiBody, ApiQuery, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { nanoid } from 'nanoid';
-import { XlsxService } from './xlsx.service.js';
-import { PdfService } from './pdf.service.js';
+import { faker } from '@faker-js/faker';
+import { ReportService } from './report.service.js';
+import type { ReportFormat } from './report.types.js';
+
+async function* fakeRows(n: number): AsyncGenerator<Record<string, unknown>> {
+  for (let i = 0; i < n; i++) {
+    yield {
+      id: i + 1,
+      name: faker.person.fullName(),
+      email: faker.internet.email(),
+      department: faker.commerce.department(),
+      salary: faker.number.int({ min: 40000, max: 180000 }),
+      joined: faker.date.past({ years: 5 }).toISOString().slice(0, 10),
+    };
+  }
+}
+
+const sampleData = [
+  { id: 1, name: 'Alice',   department: 'Engineering', salary: 95000, joined: '2023-04-12' },
+  { id: 2, name: 'Bob',     department: 'Design',      salary: 72000, joined: '2022-08-01' },
+  { id: 3, name: 'Charlie', department: 'Sales',       salary: 68000, joined: '2024-01-15' },
+  { id: 4, name: 'Diana',   department: 'Engineering', salary: 110000, joined: '2021-11-30' },
+];
 
 @ApiTags('reports')
 @Controller('reports')
 export class ReportsController {
-  constructor(
-    private readonly xlsx: XlsxService,
-    private readonly pdf: PdfService,
-  ) {}
+  constructor(private readonly reports: ReportService) {}
 
-  @Get('xlsx')
-  @ApiProduces('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-  async xlsxReport(@Res() res: Response) {
-    const buffer = await this.xlsx.buildReport([
-      { id: nanoid(), name: 'Alice', amount: 1000 },
-      { id: nanoid(), name: 'Bob', amount: 2500 },
-    ]);
-    res
-      .set({
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="report-${nanoid(8)}.xlsx"`,
-      })
-      .send(buffer);
+  @Get('sample')
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
+  @ApiQuery({ name: 'title', required: false })
+  async sample(
+    @Query('format') format: ReportFormat,
+    @Query('title') title: string | undefined,
+    @Res() res: Response,
+  ) {
+    const report = await this.reports.generate(sampleData, {
+      format,
+      title: title ?? 'Employee Report',
+    });
+    this.send(res, report);
   }
 
-  @Get('pdf')
-  @ApiProduces('application/pdf')
-  async pdfReport(@Res() res: Response) {
-    const buffer = await this.pdf.buildReport('Sample Report', [
-      { label: 'Total users', value: '1,245' },
-      { label: 'Revenue', value: '$42,310' },
-    ]);
+  @Post('generate')
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        rows: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['rows'],
+    },
+  })
+  async generate(
+    @Query('format') format: ReportFormat,
+    @Body() body: { title?: string; rows: Record<string, unknown>[] },
+    @Res() res: Response,
+  ) {
+    const report = await this.reports.generate(body.rows, { format, title: body.title });
+    this.send(res, report);
+  }
+
+  @Get('stream')
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
+  @ApiQuery({ name: 'count', required: false, description: 'Number of fake rows (default 10000)' })
+  async stream(
+    @Query('format') format: ReportFormat,
+    @Query('count') count: string | undefined,
+    @Res() res: Response,
+  ) {
+    const total = Math.min(Number(count ?? 10000), 1_000_000);
+    const options = { format, title: 'Large Report', filename: `large-${total}.${format}` };
+    res.set(this.reports.headersFor(options));
+    await this.reports.stream(fakeRows(total), res, options);
+  }
+
+  private send(res: Response, report: { buffer: Buffer; mimeType: string; filename: string }) {
     res
       .set({
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="report-${nanoid(8)}.pdf"`,
+        'Content-Type': report.mimeType,
+        'Content-Disposition': `attachment; filename="${report.filename}"`,
+        'Content-Length': report.buffer.length.toString(),
       })
-      .send(buffer);
+      .send(report.buffer);
   }
 }
