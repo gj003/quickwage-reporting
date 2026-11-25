@@ -1,5 +1,13 @@
 import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
-import { ApiBody, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBadRequestResponse,
+  ApiBody,
+  ApiOkResponse,
+  ApiOperation,
+  ApiProduces,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { faker } from '@faker-js/faker';
 import { ReportService } from './report.service.js';
@@ -32,8 +40,24 @@ export class ReportsController {
   constructor(private readonly reports: ReportService) {}
 
   @Get('sample')
-  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
-  @ApiQuery({ name: 'title', required: false })
+  @ApiOperation({
+    summary: 'Download a sample report',
+    description:
+      'Generates a small hard-coded employee report in the requested format (pdf or xlsx) and returns it as a file download. Useful for quickly validating that the report pipeline is working end-to-end.',
+  })
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true, description: 'Output file format.' })
+  @ApiQuery({ name: 'title', required: false, description: 'Title printed on the report (defaults to "Employee Report").' })
+  @ApiProduces('application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @ApiOkResponse({
+    description: 'Binary file stream of the generated report. `Content-Disposition` is set to `attachment`.',
+    content: {
+      'application/pdf': { schema: { type: 'string', format: 'binary' } },
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+        schema: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiBadRequestResponse({ description: 'Unsupported `format` value.' })
   async sample(
     @Query('format') format: ReportFormat,
     @Query('title') title: string | undefined,
@@ -47,17 +71,43 @@ export class ReportsController {
   }
 
   @Post('generate')
-  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
+  @ApiOperation({
+    summary: 'Generate a report from a caller-supplied dataset',
+    description:
+      'Accepts an arbitrary array of row objects in the request body and returns the generated file. Column headers are inferred from the keys of the first row. The response is a binary download, not JSON.',
+  })
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true, description: 'Output file format.' })
   @ApiBody({
+    description:
+      'Report payload. `rows` is required and must be a non-empty array of flat objects; every row should share the same keys.',
     schema: {
       type: 'object',
-      properties: {
-        title: { type: 'string' },
-        rows: { type: 'array', items: { type: 'object' } },
-      },
       required: ['rows'],
+      properties: {
+        title: { type: 'string', description: 'Shown on the PDF header / used as the xlsx sheet name.', example: 'Q4 Payroll' },
+        rows: {
+          type: 'array',
+          description: 'Row objects. Keys of the first row become column headers.',
+          items: { type: 'object', additionalProperties: true },
+          example: [
+            { id: 1, name: 'Alice', salary: 95000 },
+            { id: 2, name: 'Bob', salary: 72000 },
+          ],
+        },
+      },
     },
   })
+  @ApiProduces('application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @ApiOkResponse({
+    description: 'Binary file stream of the generated report.',
+    content: {
+      'application/pdf': { schema: { type: 'string', format: 'binary' } },
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+        schema: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiBadRequestResponse({ description: 'Missing/invalid `rows`, or unsupported `format`.' })
   async generate(
     @Query('format') format: ReportFormat,
     @Body() body: { title?: string; rows: Record<string, unknown>[] },
@@ -68,8 +118,29 @@ export class ReportsController {
   }
 
   @Get('stream')
-  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true })
-  @ApiQuery({ name: 'count', required: false, description: 'Number of fake rows (default 10000, max 1M)' })
+  @ApiOperation({
+    summary: 'Stream a large synthetic report',
+    description:
+      'Generates up to 1,000,000 fake rows and streams them directly to the response with constant memory. xlsx output automatically splits across sheets at Excel row limits; pdf output paginates. Cancels generation if the client disconnects.',
+  })
+  @ApiQuery({ name: 'format', enum: ['pdf', 'xlsx'], required: true, description: 'Output file format.' })
+  @ApiQuery({
+    name: 'count',
+    required: false,
+    schema: { type: 'integer', minimum: 1, maximum: 1_000_000, default: 10_000 },
+    description: 'Number of fake rows to generate. Clamped to [1, 1,000,000].',
+  })
+  @ApiProduces('application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @ApiOkResponse({
+    description: 'Streamed binary file. Served with `Content-Disposition: attachment`.',
+    content: {
+      'application/pdf': { schema: { type: 'string', format: 'binary' } },
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+        schema: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiBadRequestResponse({ description: 'Unsupported `format` value.' })
   async stream(
     @Query('format') format: ReportFormat,
     @Query('count') count: string | undefined,
@@ -80,7 +151,6 @@ export class ReportsController {
     const options = { format, title: 'Large Report', filename: `large-${total}.${format}` };
     res.set(this.reports.headersFor(options));
 
-    // Stop generating if the client goes away.
     const ac = new AbortController();
     req.on('close', () => ac.abort());
 
