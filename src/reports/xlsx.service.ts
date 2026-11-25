@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Workbook, stream } from 'exceljs';
+import ExcelJS from 'exceljs';
+
+const { Workbook, stream } = ExcelJS;
 import type { Writable } from 'node:stream';
 
 type Row = Record<string, unknown>;
