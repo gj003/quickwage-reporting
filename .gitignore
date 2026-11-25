@@ -7,3 +7,4 @@ coverage
 .DS_Store
 .vscode/*
 !.vscode/settings.json
+postgres_data
