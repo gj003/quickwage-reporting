@@ -1,9 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module.js';
+import { setupSwagger } from './config/swagger.config.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -13,13 +13,7 @@ async function bootstrap() {
   app.use(compression());
   app.enableCors();
 
-  const config = new DocumentBuilder()
-    .setTitle('Report and Analysis')
-    .setDescription('API for reports and analytics')
-    .setVersion('0.0.1')
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('/', app, document);
+  setupSwagger(app);
 
   await app.listen(process.env.PORT ?? 3000);
 }
